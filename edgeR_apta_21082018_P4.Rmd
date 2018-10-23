@@ -1,0 +1,140 @@
+---
+title: "differential binding cell-SELEX 4th pool"
+output: html_notebook
+---
+
+Load necessarry packages
+```{r, results= "hide"}
+library(tidyverse)
+library(limma)
+library(edgeR)
+```
+
+Import the dastasets
+```{r, results = 'hide'}
+
+#Sample1 = RCC-MF P4.4, 3 replicates, parallel design 
+RCCMF5_url <- "https://www.dropbox.com/s/iq0emuark3frwg5/fastaptamer_enrich_s1.tsv?dl=1"
+RCCMF5_file <- tempfile()
+download.file(RCCMF5_url, RCCMF5_file, mode = "wb")
+sample1 <- read_tsv(RCCMF5_file)
+#Sample2 = RC-124 P4.4, 3 replicates, parallel design
+RC1245_url <- "https://www.dropbox.com/s/64y4zq50106s0zo/fastaptamer_enrich_s2.tsv?dl=1"
+RC1245_file <- tempfile()
+download.file(RC1245_url, RC1245_file, mode = "wb")
+sample2 <- read_tsv(RC1245_file)
+```
+
+COmbine both datasets.
+
+Sample1 = RCC_MF binding P4 sequences, 3 replicates
+
+Sample2 = RC_124 binding P4 sequences, 3 replicates
+
+```{r}
+apta_input_1<- full_join(sample2, sample1, by = "Sequence")
+apta_input_1
+
+```
+
+Select the columns that are necessary and replace NAs with 0.
+
+```{r}
+apta_input_2 <- apta_input_1 %>% 
+  select('Reads (x).x', 'Reads (y).x', 'Reads (z).x', 'Reads (x).y', 'Reads (y).y', 'Reads (z).y') %>% 
+  replace_na(list('Reads (x).x' = 0, 'Reads (y).x'=0, 'Reads (z).x'=0, 'Reads (x).y'=0, 'Reads (y).y'=0, 'Reads (z).y'=0)) %>% 
+  sapply(as.numeric)
+```
+
+Remove the colnames
+
+```{r}
+colnames(apta_input_2) <- NULL
+```
+
+Create grouping vector - 3 replicates for each group.
+```{r}
+group <- factor(c(1,1,1,2,2,2))
+```
+
+Create DGEList
+```{r}
+apta_input_3 <- DGEList(counts = apta_input_2, group = group)
+apta_input_3
+```
+
+Calculate counts per million and view summary
+
+```{r}
+apta_input_3_cpm <- cpm(apta_input_3)
+summary(apta_input_3$counts)
+```
+
+Filter out sequences that appear in less than 2 times or that have less than 2 reads per million 
+
+```{r}
+keep <- rowSums(cpm(apta_input_3)>2) >= 2
+apta_input_3_filt <- apta_input_3[keep, , keep.lib.sizes=FALSE]
+apta_input_3_filt
+summary(apta_input_3_filt$counts)
+```
+
+
+Calculate normalization factors
+
+```{r}
+apta_input_4_filt_norm <- calcNormFactors(apta_input_3_filt)
+apta_input_4_filt_norm
+nrow(apta_input_4_filt_norm)
+```  
+
+Create a model matrix for experiment
+
+```{r}
+design_apta <- model.matrix(~group)
+```
+
+Plot MDS
+
+```{r}
+plotMDS(apta_input_4_filt_norm)
+```
+
+Estimate dispersion
+
+```{r}
+#apta_de <- estimateDisp(apta_input_4_filt_norm, design_apta)
+apta_de <- estimateGLMCommonDisp(apta_input_4_filt_norm, design_apta)
+apta_de <- estimateGLMTrendedDisp(apta_de, design_apta)
+apta_de <- estimateGLMTagwiseDisp(apta_de, design_apta)
+apta_de$common.dispersion
+```
+
+Plot BCV
+
+```{r}
+plotBCV(apta_de)
+```
+
+
+
+```{r}
+fit <- glmFit(apta_de, design_apta)
+lrt <- glmLRT(fit, coef = 2)
+lrt$table
+top_apta <- topTags(lrt,n = 2000L, sort.by = "logFC", adjust.method = "fdr", p.value = 0.0001)
+top_apta_table <- top_apta$table
+top_apta_table
+```
+
+
+
+```{r}
+dbapta <- decideTestsDGE(lrt, adjust.method = "fdr", p.value=0.0001, lfc = 2)
+dbapta <- rownames(lrt)[as.logical(dbapta)]
+length(dbapta)
+plotSmear(lrt, de.tags=dbapta)+abline(h = c(-2, 0, 2), col = c("dodgerblue","yellow","dodgerblue"), lty=2)
+```
+
+
+
